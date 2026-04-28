@@ -8,21 +8,30 @@ from discord import app_commands
 from discord.ext import commands
 
 # ============================================================
-# TICKET PREMIUM - SERVIDOR DE VENDAS DE BOTS
+# RAUL SYSTEMS - TICKET PREMIUM DE VENDAS
 # Desenvolvido por Dev Raul
+# Railway:
+#   Variável obrigatória: DISCORD_TOKEN
 # Requisitos:
 #   pip install -U discord.py
 # ============================================================
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = 0  # opcional: coloque o ID do seu servidor para slash commands aparecerem mais rápido
-DATA_FILE = "ticket_dev_raul_data.json"
 
-BRAND_NAME = "Raul System"
+GUILD_ID = 0  # opcional: coloque o ID do servidor para comandos aparecerem mais rápido
+DATA_FILE = "raul_systems_ticket_data.json"
+
+BRAND_NAME = "Raul Systems"
 DEV_NAME = "Dev Raul"
-BOT_STATUS = "Orçamentos • Bots personalizados"
+BOT_STATUS = "Raul Systems • Bots personalizados"
 THUMBNAIL_URL = "https://cdn-icons-png.flaticon.com/512/4712/4712109.png"
-EMBED_COLOR = 0x2ECC71
+EMBED_COLOR = 0x8E44AD
+
+ROLE_INTERESSADO = "👀・Interessado"
+ROLE_CLIENTE = "🛒・Cliente"
+ROLE_CLIENTE_VIP = "💎・Cliente VIP"
+
+CANAL_DEMOS_NOME = "🎥・demonstrações"
 
 
 # =========================
@@ -66,9 +75,16 @@ class DataManager:
             data = self.default_data()
             self.save_data(data)
             return data
+
         try:
             with open(self.path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                loaded = json.load(f)
+
+            default = self.default_data()
+            for key, value in default.items():
+                loaded.setdefault(key, value)
+
+            return loaded
         except Exception:
             data = self.default_data()
             self.save_data(data)
@@ -114,19 +130,26 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 def is_staff(member: discord.Member) -> bool:
     if member.guild_permissions.administrator:
         return True
+
     staff_role_ids = data.data.get("staff_role_ids", [])
-    if not staff_role_ids:
-        return False
     return any(role.id in staff_role_ids for role in member.roles)
 
 
 async def require_staff(interaction: discord.Interaction) -> bool:
     if not interaction.guild or not isinstance(interaction.user, discord.Member):
-        await interaction.response.send_message("❌ Este comando só pode ser usado dentro de um servidor.", ephemeral=True)
+        await interaction.response.send_message(
+            "❌ Este comando só pode ser usado dentro de um servidor.",
+            ephemeral=True
+        )
         return False
+
     if not is_staff(interaction.user):
-        await interaction.response.send_message("❌ Você não tem permissão para usar isso.", ephemeral=True)
+        await interaction.response.send_message(
+            "❌ Você não tem permissão para usar isso.",
+            ephemeral=True
+        )
         return False
+
     return True
 
 
@@ -134,10 +157,11 @@ async def send_log(guild: discord.Guild, text: str) -> None:
     logs_id = data.data.get("logs_channel_id")
     if not logs_id:
         return
+
     channel = guild.get_channel(logs_id)
     if isinstance(channel, discord.TextChannel):
         embed = discord.Embed(
-            title="📋 Log do Sistema de Tickets",
+            title="📋 Log | Raul Systems",
             description=text,
             color=discord.Color.blurple(),
             timestamp=now_utc(),
@@ -146,47 +170,88 @@ async def send_log(guild: discord.Guild, text: str) -> None:
         await channel.send(embed=embed)
 
 
+async def add_role_by_name(member: discord.Member, role_name: str) -> bool:
+    role = discord.utils.get(member.guild.roles, name=role_name)
+    if not role:
+        return False
+
+    try:
+        await member.add_roles(role, reason=f"{BRAND_NAME} ticket system")
+        return True
+    except Exception:
+        return False
+
+
+async def remove_role_by_name(member: discord.Member, role_name: str) -> bool:
+    role = discord.utils.get(member.guild.roles, name=role_name)
+    if not role:
+        return False
+
+    try:
+        await member.remove_roles(role, reason=f"{BRAND_NAME} ticket system")
+        return True
+    except Exception:
+        return False
+
+
+def get_demo_channel_mention(guild: discord.Guild) -> str:
+    channel = discord.utils.get(guild.text_channels, name=CANAL_DEMOS_NOME)
+    if channel:
+        return channel.mention
+    return f"#{CANAL_DEMOS_NOME}"
+
+
 # =========================
-# MODAL DO ORÇAMENTO
+# MODAL BASE DO TICKET
 # =========================
 
-class BudgetModal(discord.ui.Modal, title="💰 Orçamento do Bot"):
-    bot_name = discord.ui.TextInput(
-        label="Nome do bot ou projeto",
-        placeholder="Ex: Bot de ticket, bot de vendas, bot de moderação...",
-        max_length=80,
-        required=True,
-    )
+class BudgetModal(discord.ui.Modal):
+    def __init__(self, ticket_type: str):
+        super().__init__(title=f"🎫 {ticket_type}")
+        self.ticket_type = ticket_type
 
-    bot_description = discord.ui.TextInput(
-        label="Descreva como você quer o bot",
-        placeholder="Explique funções, comandos, cargos, canais, painel, logs, sistema de pagamento etc.",
-        style=discord.TextStyle.paragraph,
-        max_length=1500,
-        required=True,
-    )
+        self.project_name = discord.ui.TextInput(
+            label="Nome do bot ou projeto",
+            placeholder="Ex: Bot de ticket, vendas, moderação, RP...",
+            max_length=80,
+            required=True,
+        )
 
-    budget = discord.ui.TextInput(
-        label="Qual seu orçamento ou faixa de valor?",
-        placeholder="Ex: R$50, R$100, R$200, quero orçamento...",
-        max_length=80,
-        required=False,
-    )
+        self.description = discord.ui.TextInput(
+            label="Explique o que você precisa",
+            placeholder="Funções, comandos, cargos, canais, logs, painel, sistema etc.",
+            style=discord.TextStyle.paragraph,
+            max_length=1500,
+            required=True,
+        )
 
-    deadline = discord.ui.TextInput(
-        label="Prazo desejado",
-        placeholder="Ex: urgente, 3 dias, 5 dias, sem pressa...",
-        max_length=80,
-        required=False,
-    )
+        self.budget = discord.ui.TextInput(
+            label="Orçamento ou faixa de valor",
+            placeholder="Ex: R$50, R$100, R$200, quero orçamento...",
+            max_length=80,
+            required=False,
+        )
 
-    references = discord.ui.TextInput(
-        label="Referências ou observações",
-        placeholder="Tem print, exemplo, bot parecido, servidor referência? Escreva aqui.",
-        style=discord.TextStyle.paragraph,
-        max_length=1000,
-        required=False,
-    )
+        self.deadline = discord.ui.TextInput(
+            label="Prazo desejado",
+            placeholder="Ex: urgente, 3 dias, 5 dias, sem pressa...",
+            max_length=80,
+            required=False,
+        )
+
+        self.references = discord.ui.TextInput(
+            label="Referências ou observações",
+            placeholder="Tem print, bot parecido, servidor referência? Escreva aqui.",
+            style=discord.TextStyle.paragraph,
+            max_length=1000,
+            required=False,
+        )
+
+        self.add_item(self.project_name)
+        self.add_item(self.description)
+        self.add_item(self.budget)
+        self.add_item(self.deadline)
+        self.add_item(self.references)
 
     async def on_submit(self, interaction: discord.Interaction):
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
@@ -214,7 +279,6 @@ class BudgetModal(discord.ui.Modal, title="💰 Orçamento do Bot"):
             )
             return
 
-        # Evita ticket duplicado aberto pelo mesmo usuário
         for ticket in data.data.get("tickets", {}).values():
             if ticket.get("owner_id") == interaction.user.id and ticket.get("status") == "open":
                 old_channel = interaction.guild.get_channel(ticket.get("text_channel_id"))
@@ -236,7 +300,6 @@ class BudgetModal(discord.ui.Modal, title="💰 Orçamento do Bot"):
                 attach_files=True,
                 read_message_history=True,
             ),
-            
             interaction.guild.me: discord.PermissionOverwrite(
                 view_channel=True,
                 send_messages=True,
@@ -261,11 +324,12 @@ class BudgetModal(discord.ui.Modal, title="💰 Orçamento do Bot"):
             name=channel_name,
             category=category,
             overwrites=overwrites,
-            reason=f"Ticket de orçamento criado por {interaction.user}",
+            reason=f"Ticket criado por {interaction.user}",
         )
 
         ticket_payload = {
             "ticket_id": number,
+            "ticket_type": self.ticket_type,
             "owner_id": interaction.user.id,
             "owner_name": str(interaction.user),
             "text_channel_id": text_channel.id,
@@ -273,26 +337,35 @@ class BudgetModal(discord.ui.Modal, title="💰 Orçamento do Bot"):
             "claimed_by_id": None,
             "claimed_by_name": None,
             "status": "open",
+            "sold": False,
+            "delivered": False,
             "created_at": br_now(),
-            "bot_name": str(self.bot_name),
-            "description": str(self.bot_description),
+            "project_name": str(self.project_name),
+            "description": str(self.description),
             "budget": str(self.budget) if self.budget else "Não informado",
             "deadline": str(self.deadline) if self.deadline else "Não informado",
             "references": str(self.references) if self.references else "Não informado",
         }
+
         data.add_ticket(text_channel.id, ticket_payload)
 
+        await add_role_by_name(interaction.user, ROLE_INTERESSADO)
+
+        demo_mention = get_demo_channel_mention(interaction.guild)
+
         welcome_embed = discord.Embed(
-            title="🎫 Ticket de Orçamento Criado",
+            title=f"🎫 Ticket #{number} aberto",
             description=(
                 f"Olá {interaction.user.mention}, seu atendimento foi aberto com sucesso.\n\n"
+                f"📌 **Tipo:** {self.ticket_type}\n"
                 "Nossa equipe já recebeu sua solicitação. Aguarde um momento, logo alguém irá assumir seu ticket.\n\n"
-                "Enquanto isso, envie prints, referências, detalhes extras ou qualquer informação que ajude no orçamento."
+                f"🎥 Enquanto isso, veja nossos bots funcionando em: {demo_mention}\n\n"
+                "💡 **Todos os bots são personalizados conforme seu servidor.**"
             ),
             color=EMBED_COLOR,
             timestamp=now_utc(),
         )
-        welcome_embed.add_field(name="🤖 Projeto", value=str(self.bot_name), inline=False)
+        welcome_embed.add_field(name="🤖 Projeto", value=str(self.project_name), inline=False)
         welcome_embed.add_field(name="💰 Orçamento", value=str(self.budget) if self.budget else "Não informado", inline=True)
         welcome_embed.add_field(name="⏱️ Prazo", value=str(self.deadline) if self.deadline else "Não informado", inline=True)
         welcome_embed.set_footer(text=f"{BRAND_NAME} • {DEV_NAME}")
@@ -304,8 +377,9 @@ class BudgetModal(discord.ui.Modal, title="💰 Orçamento do Bot"):
             timestamp=now_utc(),
         )
         details_embed.add_field(name="👤 Cliente", value=interaction.user.mention, inline=False)
-        details_embed.add_field(name="🤖 Nome do projeto", value=str(self.bot_name), inline=False)
-        details_embed.add_field(name="📝 Descrição", value=str(self.bot_description)[:1024], inline=False)
+        details_embed.add_field(name="📌 Tipo", value=self.ticket_type, inline=True)
+        details_embed.add_field(name="🤖 Projeto", value=str(self.project_name), inline=True)
+        details_embed.add_field(name="📝 Descrição", value=str(self.description)[:1024], inline=False)
         details_embed.add_field(name="💰 Orçamento", value=str(self.budget) if self.budget else "Não informado", inline=True)
         details_embed.add_field(name="⏱️ Prazo", value=str(self.deadline) if self.deadline else "Não informado", inline=True)
         details_embed.add_field(name="📎 Referências", value=str(self.references)[:1024] if self.references else "Não informado", inline=False)
@@ -325,12 +399,12 @@ class BudgetModal(discord.ui.Modal, title="💰 Orçamento do Bot"):
 
         await send_log(
             interaction.guild,
-            f"🎫 Ticket #{number} criado por {interaction.user.mention} em {text_channel.mention}."
+            f"🎫 Ticket #{number} criado por {interaction.user.mention}. Tipo: **{self.ticket_type}**. Canal: {text_channel.mention}"
         )
 
 
 # =========================
-# BOTÃO PRINCIPAL DO PAINEL
+# PAINEL PRINCIPAL
 # =========================
 
 class TicketPanelView(discord.ui.View):
@@ -338,23 +412,50 @@ class TicketPanelView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="Iniciar Ticket",
-        emoji="🎫",
+        label="Comprar Bot",
+        emoji="💰",
         style=discord.ButtonStyle.success,
-        custom_id="premium_ticket:start",
+        custom_id="rs_ticket:buy",
     )
-    async def start_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(BudgetModal())
+    async def buy_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(BudgetModal("💰 Comprar bot"))
+
+    @discord.ui.button(
+        label="Suporte",
+        emoji="🛠️",
+        style=discord.ButtonStyle.primary,
+        custom_id="rs_ticket:support",
+    )
+    async def support_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(BudgetModal("🛠️ Suporte"))
+
+    @discord.ui.button(
+        label="Dúvida",
+        emoji="❓",
+        style=discord.ButtonStyle.secondary,
+        custom_id="rs_ticket:doubt",
+    )
+    async def doubt_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(BudgetModal("❓ Dúvida"))
+
+    @discord.ui.button(
+        label="Alteração",
+        emoji="📦",
+        style=discord.ButtonStyle.secondary,
+        custom_id="rs_ticket:change",
+    )
+    async def change_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(BudgetModal("📦 Solicitar alteração"))
 
 
 # =========================
-# CONTROLES DO TICKET
+# MODAIS AUXILIARES
 # =========================
 
 class AddMemberModal(discord.ui.Modal, title="➕ Adicionar membro"):
     member_id = discord.ui.TextInput(
         label="ID do usuário",
-        placeholder="Cole o ID do usuário que deseja adicionar ao ticket",
+        placeholder="Cole o ID do usuário que deseja adicionar",
         max_length=30,
         required=True,
     )
@@ -388,8 +489,52 @@ class AddMemberModal(discord.ui.Modal, title="➕ Adicionar membro"):
         )
 
         await interaction.response.send_message(f"✅ {member.mention} foi adicionado ao ticket.")
-        await send_log(interaction.guild, f"➕ {member.mention} adicionado ao ticket {interaction.channel.mention} por {interaction.user.mention}.")
+        await send_log(
+            interaction.guild,
+            f"➕ {member.mention} adicionado ao ticket {interaction.channel.mention} por {interaction.user.mention}."
+        )
 
+
+class RemoveMemberModal(discord.ui.Modal, title="➖ Remover membro"):
+    member_id = discord.ui.TextInput(
+        label="ID do usuário",
+        placeholder="Cole o ID do usuário que deseja remover",
+        max_length=30,
+        required=True,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not interaction.guild or not isinstance(interaction.channel, discord.TextChannel):
+            await interaction.response.send_message("❌ Erro ao remover membro.", ephemeral=True)
+            return
+
+        if not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
+            await interaction.response.send_message("❌ Apenas a equipe pode remover membros.", ephemeral=True)
+            return
+
+        try:
+            user_id = int(str(self.member_id).strip())
+        except ValueError:
+            await interaction.response.send_message("❌ ID inválido.", ephemeral=True)
+            return
+
+        member = interaction.guild.get_member(user_id)
+        if not member:
+            await interaction.response.send_message("❌ Não encontrei esse membro no servidor.", ephemeral=True)
+            return
+
+        await interaction.channel.set_permissions(member, overwrite=None)
+
+        await interaction.response.send_message(f"✅ {member.mention} foi removido do ticket.")
+        await send_log(
+            interaction.guild,
+            f"➖ {member.mention} removido do ticket {interaction.channel.mention} por {interaction.user.mention}."
+        )
+
+
+# =========================
+# CONTROLES DO TICKET
+# =========================
 
 class CloseConfirmView(discord.ui.View):
     def __init__(self):
@@ -406,13 +551,15 @@ class CloseConfirmView(discord.ui.View):
             await interaction.response.send_message("❌ Este canal não está registrado como ticket.", ephemeral=True)
             return
 
+        owner_id = ticket.get("owner_id")
+        is_owner = interaction.user.id == owner_id
         is_team = isinstance(interaction.user, discord.Member) and is_staff(interaction.user)
 
-        if not is_team:
-            await interaction.response.send_message("❌ Apenas cargos autorizados podem encerrar este ticket.", ephemeral=True)
+        if not is_owner and not is_team:
+            await interaction.response.send_message("❌ Você não pode encerrar este ticket.", ephemeral=True)
             return
 
-        await interaction.response.send_message("🔒 Encerrando ticket e removendo canais criados pelo bot...")
+        await interaction.response.send_message("🔒 Encerrando ticket...")
 
         voice_channel_id = ticket.get("voice_channel_id")
         if voice_channel_id:
@@ -425,7 +572,12 @@ class CloseConfirmView(discord.ui.View):
 
         await send_log(
             interaction.guild,
-            f"🔒 Ticket #{ticket.get('ticket_id')} encerrado por {interaction.user.mention}. Canal: #{interaction.channel.name}"
+            (
+                f"🔒 Ticket #{ticket.get('ticket_id')} encerrado por {interaction.user.mention}.\n"
+                f"📌 Tipo: **{ticket.get('ticket_type')}**\n"
+                f"💰 Vendido: **{'Sim' if ticket.get('sold') else 'Não'}**\n"
+                f"📦 Entregue: **{'Sim' if ticket.get('delivered') else 'Não'}**"
+            )
         )
 
         data.remove_ticket(interaction.channel.id)
@@ -444,7 +596,7 @@ class TicketControlView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Assumir Ticket", emoji="🙋", style=discord.ButtonStyle.primary, custom_id="premium_ticket:claim")
+    @discord.ui.button(label="Assumir", emoji="🙋", style=discord.ButtonStyle.primary, custom_id="rs_ticket:claim")
     async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.guild or not isinstance(interaction.channel, discord.TextChannel):
             await interaction.response.send_message("❌ Erro ao assumir ticket.", ephemeral=True)
@@ -481,7 +633,7 @@ class TicketControlView(discord.ui.View):
         await interaction.response.send_message(embed=embed)
         await send_log(interaction.guild, f"🙋 Ticket #{ticket.get('ticket_id')} assumido por {interaction.user.mention}.")
 
-    @discord.ui.button(label="Criar Call", emoji="📞", style=discord.ButtonStyle.success, custom_id="premium_ticket:create_call")
+    @discord.ui.button(label="Criar Call", emoji="📞", style=discord.ButtonStyle.success, custom_id="rs_ticket:create_call")
     async def create_call(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.guild or not isinstance(interaction.channel, discord.TextChannel):
             await interaction.response.send_message("❌ Erro ao criar call.", ephemeral=True)
@@ -504,6 +656,7 @@ class TicketControlView(discord.ui.View):
 
         voice_category_id = data.data.get("voice_category_id") or data.data.get("ticket_category_id")
         category = interaction.guild.get_channel(voice_category_id)
+
         if not isinstance(category, discord.CategoryChannel):
             await interaction.response.send_message("❌ Categoria de call inválida. Reconfigure com `/cfgticket`.", ephemeral=True)
             return
@@ -515,12 +668,24 @@ class TicketControlView(discord.ui.View):
 
         overwrites = {
             interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False, connect=False),
-            interaction.guild.me: discord.PermissionOverwrite(view_channel=True, connect=True, manage_channels=True, move_members=True),
+            interaction.guild.me: discord.PermissionOverwrite(
+                view_channel=True,
+                connect=True,
+                manage_channels=True,
+                move_members=True
+            ),
         }
+
         if owner:
             overwrites[owner] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True)
+
         for staff_role in staff_roles:
-            overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True, move_members=True)
+            overwrites[staff_role] = discord.PermissionOverwrite(
+                view_channel=True,
+                connect=True,
+                speak=True,
+                move_members=True
+            )
 
         voice_channel = await interaction.guild.create_voice_channel(
             name=sanitize_channel_name(f"call-ticket-{ticket.get('ticket_id')}")[:90],
@@ -535,24 +700,120 @@ class TicketControlView(discord.ui.View):
         await interaction.response.send_message(f"📞 Call criada com sucesso: {voice_channel.mention}")
         await send_log(interaction.guild, f"📞 Call criada para ticket #{ticket.get('ticket_id')} por {interaction.user.mention}.")
 
-    @discord.ui.button(label="Adicionar Membro", emoji="➕", style=discord.ButtonStyle.secondary, custom_id="premium_ticket:add_member")
+    @discord.ui.button(label="Adicionar", emoji="➕", style=discord.ButtonStyle.secondary, custom_id="rs_ticket:add_member")
     async def add_member(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
             await interaction.response.send_message("❌ Apenas a equipe pode adicionar membros.", ephemeral=True)
             return
+
         await interaction.response.send_modal(AddMemberModal())
 
-    @discord.ui.button(label="Encerrar", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="premium_ticket:close")
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        ticket = data.get_ticket(interaction.channel.id) if isinstance(interaction.channel, discord.TextChannel) else None
+    @discord.ui.button(label="Remover", emoji="➖", style=discord.ButtonStyle.secondary, custom_id="rs_ticket:remove_member")
+    async def remove_member(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
+            await interaction.response.send_message("❌ Apenas a equipe pode remover membros.", ephemeral=True)
+            return
+
+        await interaction.response.send_modal(RemoveMemberModal())
+
+    @discord.ui.button(label="Venda", emoji="💰", style=discord.ButtonStyle.success, custom_id="rs_ticket:sold")
+    async def mark_sold(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.guild or not isinstance(interaction.channel, discord.TextChannel):
+            await interaction.response.send_message("❌ Erro ao marcar venda.", ephemeral=True)
+            return
+
+        if not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
+            await interaction.response.send_message("❌ Apenas a equipe pode marcar venda.", ephemeral=True)
+            return
+
+        ticket = data.get_ticket(interaction.channel.id)
         if not ticket:
             await interaction.response.send_message("❌ Este canal não é um ticket registrado.", ephemeral=True)
             return
 
+        owner = interaction.guild.get_member(ticket.get("owner_id"))
+        if owner:
+            await add_role_by_name(owner, ROLE_CLIENTE)
+            await remove_role_by_name(owner, ROLE_INTERESSADO)
+
+        ticket["sold"] = True
+        ticket["sold_by_id"] = interaction.user.id
+        ticket["sold_by_name"] = str(interaction.user)
+        ticket["sold_at"] = br_now()
+        data.add_ticket(interaction.channel.id, ticket)
+
+        embed = discord.Embed(
+            title="💰 Venda Confirmada",
+            description=(
+                f"Venda marcada por {interaction.user.mention}.\n\n"
+                "✅ Cliente registrado\n"
+                "✅ Cargo de cliente aplicado se existir\n"
+                "✅ Ticket atualizado no sistema"
+            ),
+            color=discord.Color.gold(),
+            timestamp=now_utc(),
+        )
+        embed.set_footer(text=f"{BRAND_NAME} • {DEV_NAME}")
+
+        await interaction.response.send_message(embed=embed)
+        await send_log(
+            interaction.guild,
+            f"💰 Ticket #{ticket.get('ticket_id')} marcado como venda por {interaction.user.mention}."
+        )
+
+    @discord.ui.button(label="Entregue", emoji="📦", style=discord.ButtonStyle.primary, custom_id="rs_ticket:delivered")
+    async def mark_delivered(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.guild or not isinstance(interaction.channel, discord.TextChannel):
+            await interaction.response.send_message("❌ Erro ao marcar entrega.", ephemeral=True)
+            return
+
+        if not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
+            await interaction.response.send_message("❌ Apenas a equipe pode marcar entrega.", ephemeral=True)
+            return
+
+        ticket = data.get_ticket(interaction.channel.id)
+        if not ticket:
+            await interaction.response.send_message("❌ Este canal não é um ticket registrado.", ephemeral=True)
+            return
+
+        ticket["delivered"] = True
+        ticket["delivered_by_id"] = interaction.user.id
+        ticket["delivered_by_name"] = str(interaction.user)
+        ticket["delivered_at"] = br_now()
+        data.add_ticket(interaction.channel.id, ticket)
+
+        embed = discord.Embed(
+            title="📦 Bot Entregue",
+            description=(
+                "✅ Entrega registrada com sucesso.\n\n"
+                "Após o cliente confirmar que está tudo certo, alterações extras podem ter acréscimo conforme combinado.\n\n"
+                f"Obrigado por comprar com a **{BRAND_NAME}**."
+            ),
+            color=discord.Color.green(),
+            timestamp=now_utc(),
+        )
+        embed.set_footer(text=f"{BRAND_NAME} • {DEV_NAME}")
+
+        await interaction.response.send_message(embed=embed)
+        await send_log(
+            interaction.guild,
+            f"📦 Ticket #{ticket.get('ticket_id')} marcado como entregue por {interaction.user.mention}."
+        )
+
+    @discord.ui.button(label="Encerrar", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="rs_ticket:close")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        ticket = data.get_ticket(interaction.channel.id) if isinstance(interaction.channel, discord.TextChannel) else None
+
+        if not ticket:
+            await interaction.response.send_message("❌ Este canal não é um ticket registrado.", ephemeral=True)
+            return
+
+        owner_id = ticket.get("owner_id")
+        is_owner = interaction.user.id == owner_id
         is_team = isinstance(interaction.user, discord.Member) and is_staff(interaction.user)
 
-        if not is_team:
-            await interaction.response.send_message("❌ Apenas cargos autorizados podem encerrar este ticket.", ephemeral=True)
+        if not is_owner and not is_team:
+            await interaction.response.send_message("❌ Você não pode encerrar este ticket.", ephemeral=True)
             return
 
         await interaction.response.send_message(
@@ -570,15 +831,15 @@ class TicketCommands(commands.Cog):
     def __init__(self, bot_client: commands.Bot):
         self.bot = bot_client
 
-    @app_commands.command(name="cfgticket", description="Configura o sistema premium de tickets")
+    @app_commands.command(name="cfgticket", description="Configura o sistema de tickets da Raul Systems")
     @app_commands.describe(
         canal_painel="Canal onde o painel do ticket será enviado",
-        categoria_tickets="Categoria onde os tickets de texto serão criados",
+        categoria_tickets="Categoria onde os tickets serão criados",
         categoria_calls="Categoria onde as calls serão criadas",
-        cargo_atendimento_1="Cargo autorizado 1 para atender e gerenciar tickets",
+        cargo_atendimento_1="Cargo autorizado 1",
         cargo_atendimento_2="Cargo autorizado 2 opcional",
         cargo_atendimento_3="Cargo autorizado 3 opcional",
-        canal_logs="Canal para receber logs do sistema",
+        canal_logs="Canal para receber logs",
     )
     async def cfgticket(
         self,
@@ -594,30 +855,32 @@ class TicketCommands(commands.Cog):
         if not await require_staff(interaction):
             return
 
-        data.data["ticket_panel_channel_id"] = canal_painel.id
-        data.data["ticket_category_id"] = categoria_tickets.id
-        data.data["voice_category_id"] = categoria_calls.id
         staff_roles = [cargo_atendimento_1]
+
         if cargo_atendimento_2:
             staff_roles.append(cargo_atendimento_2)
+
         if cargo_atendimento_3:
             staff_roles.append(cargo_atendimento_3)
 
-        # Remove cargos repetidos mantendo a ordem
         unique_staff_roles = []
         seen_role_ids = set()
+
         for role in staff_roles:
             if role.id not in seen_role_ids:
                 unique_staff_roles.append(role)
                 seen_role_ids.add(role.id)
 
+        data.data["ticket_panel_channel_id"] = canal_painel.id
+        data.data["ticket_category_id"] = categoria_tickets.id
+        data.data["voice_category_id"] = categoria_calls.id
         data.data["staff_role_ids"] = [role.id for role in unique_staff_roles]
         data.data["logs_channel_id"] = canal_logs.id
         data.save()
 
         embed = discord.Embed(
             title="✅ Sistema de Ticket Configurado",
-            description="A central premium de orçamento foi configurada com sucesso.",
+            description="A central de atendimento da Raul Systems foi configurada com sucesso.",
             color=discord.Color.green(),
             timestamp=now_utc(),
         )
@@ -636,50 +899,49 @@ class TicketCommands(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
         await send_log(interaction.guild, f"⚙️ Sistema configurado por {interaction.user.mention}.")
 
-    @app_commands.command(name="ticket", description="Envia o painel principal de orçamento")
+    @app_commands.command(name="ticket", description="Envia o painel principal de atendimento")
     async def ticket(self, interaction: discord.Interaction):
         if not await require_staff(interaction):
             return
 
         channel_id = data.data.get("ticket_panel_channel_id")
+
         if not channel_id:
             await interaction.response.send_message("❌ Configure o sistema primeiro usando `/cfgticket`.", ephemeral=True)
             return
 
         panel_channel = interaction.guild.get_channel(channel_id) if interaction.guild else None
+
         if not isinstance(panel_channel, discord.TextChannel):
             await interaction.response.send_message("❌ Canal do painel inválido. Reconfigure com `/cfgticket`.", ephemeral=True)
             return
 
         embed = discord.Embed(
-            title="🤖 Orçamento de Bot Personalizado",
+            title="🤖 Raul Systems | Central de Atendimento",
             description=(
-                "Clique no botão abaixo para iniciar seu atendimento e solicitar um orçamento.\n\n"
-                "Ao abrir o ticket, preencha as informações do bot que você deseja. "
-                "Explique as funções, comandos, sistemas, cargos, canais, painel, logs e qualquer detalhe importante.\n\n"
-                "Nossa equipe irá analisar sua ideia e responder com prazo, valor e possibilidades de desenvolvimento."
+                "Solicite seu orçamento, suporte ou alteração clicando em uma das opções abaixo.\n\n"
+                "Desenvolvemos bots personalizados para Discord com foco em vendas, tickets, moderação, logs, RP, automações e sistemas exclusivos.\n\n"
+                "🎥 Antes de comprar, veja nossos bots funcionando no canal de demonstrações.\n\n"
+                "💡 Quanto mais detalhes você enviar, mais rápido e preciso será o atendimento."
             ),
             color=EMBED_COLOR,
             timestamp=now_utc(),
         )
         embed.add_field(
-            name="📦 O que você pode pedir?",
+            name="📦 O que fazemos?",
             value=(
-                "• Bot de ticket\n"
-                "• Bot de vendas\n"
-                "• Bot de moderação\n"
-                "• Bot de logs\n"
-                "• Bot de cargos/reação\n"
-                "• Bot personalizado para seu servidor"
+                "🎫 Bot de ticket\n"
+                "🛒 Bot de vendas\n"
+                "🛡️ Bot de moderação\n"
+                "📋 Bot de logs\n"
+                "🏙️ Bot para GTA RP\n"
+                "⚙️ Sistemas personalizados"
             ),
             inline=False,
         )
         embed.add_field(
-            name="⚠️ Importante",
-            value=(
-                "Quanto mais detalhes você enviar, mais rápido e preciso será o orçamento. "
-                "Prints e referências ajudam muito."
-            ),
+            name="⏱️ Atendimento",
+            value="Tempo médio de resposta: **5 a 15 minutos**, conforme disponibilidade da equipe.",
             inline=False,
         )
         embed.set_footer(text=f"{BRAND_NAME} • {DEV_NAME}")
@@ -692,10 +954,46 @@ class TicketCommands(commands.Cog):
         await interaction.response.send_message(f"✅ Painel de ticket enviado em {panel_channel.mention}.", ephemeral=True)
         await send_log(interaction.guild, f"📢 Painel de ticket enviado por {interaction.user.mention}.")
 
+    @app_commands.command(name="ticketinfo", description="Mostra informações do ticket atual")
+    async def ticketinfo(self, interaction: discord.Interaction):
+        if not isinstance(interaction.channel, discord.TextChannel):
+            await interaction.response.send_message("❌ Use dentro de um canal de ticket.", ephemeral=True)
+            return
+
+        ticket = data.get_ticket(interaction.channel.id)
+
+        if not ticket:
+            await interaction.response.send_message("❌ Este canal não está registrado como ticket.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title=f"📋 Ticket #{ticket.get('ticket_id')}",
+            color=EMBED_COLOR,
+            timestamp=now_utc(),
+        )
+        embed.add_field(name="📌 Tipo", value=ticket.get("ticket_type", "Não informado"), inline=True)
+        embed.add_field(name="👤 Cliente", value=f"<@{ticket.get('owner_id')}>", inline=True)
+        embed.add_field(name="🤖 Projeto", value=ticket.get("project_name", "Não informado"), inline=False)
+        embed.add_field(name="💰 Vendido", value="Sim" if ticket.get("sold") else "Não", inline=True)
+        embed.add_field(name="📦 Entregue", value="Sim" if ticket.get("delivered") else "Não", inline=True)
+        embed.add_field(
+            name="🙋 Responsável",
+            value=f"<@{ticket.get('claimed_by_id')}>" if ticket.get("claimed_by_id") else "Não assumido",
+            inline=True,
+        )
+        embed.set_footer(text=f"{BRAND_NAME} • {DEV_NAME}")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# =========================
+# EVENTOS
+# =========================
 
 @bot.event
 async def setup_hook():
     await bot.add_cog(TicketCommands(bot))
+
     bot.add_view(TicketPanelView())
     bot.add_view(TicketControlView())
 
@@ -717,5 +1015,5 @@ async def on_ready():
 
 if __name__ == "__main__":
     if not TOKEN:
-        raise RuntimeError("Configure a variável de ambiente DISCORD_TOKEN antes de iniciar o bot.")
+        raise RuntimeError("Coloque o token na variável DISCORD_TOKEN no Railway.")
     bot.run(TOKEN)
